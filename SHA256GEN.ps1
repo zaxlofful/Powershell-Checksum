@@ -8,7 +8,7 @@ $entries = Get-ChildItem -File -Recurse |
     Where-Object { $_.Name -ne $outputFile } |
     Sort-Object FullName |
     ForEach-Object {
-        $hash = (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash
+        $hash = (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToUpper()
         $relativePath = $_.FullName.Substring($currentDirectory.Length + 1)
 
         "$hash  $relativePath"
@@ -21,7 +21,7 @@ $memoryStream = [System.IO.MemoryStream]::new(
     [System.Text.Encoding]::UTF8.GetBytes($manifestText)
 )
 
-$masterHash = (Get-FileHash -Algorithm SHA256 -InputStream $memoryStream).Hash
+$masterHash = (Get-FileHash -Algorithm SHA256 -InputStream $memoryStream).Hash.ToUpper()
 
 $memoryStream.Dispose()
 
