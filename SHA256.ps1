@@ -1,54 +1,106 @@
-# Get the current directory (where the script is executed from)
+# Directory containing the manifest
 $directoryPath = (Get-Location).Path
-
-# Hash file path (assuming it's named "SHA256" and located in the same directory as the script)
 $hashFilePath = Join-Path $directoryPath "SHA256"
 
-# Function to compute SHA256 hash for a file
-function Get-SHA256Hash($file) {
-    $sha256 = [System.Security.Cryptography.SHA256]::Create()
-    $stream = [System.IO.File]::OpenRead($file)
-    $hash = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace("-", "").ToLower()
-    $stream.Close()
-    return $hash
+if (-not (Test-Path $hashFilePath)) {
+    Write-Host "Hash file 'SHA256' not found."
+    exit 1
 }
 
-# Check if the hash file exists
-if (-Not (Test-Path $hashFilePath)) {
-    Write-Host "Hash file 'SHA256' not found in $directoryPath."
-    exit
+# Read manifest
+$manifestLines = Get-Content $hashFilePath
+
+if ($manifestLines.Count -lt 3 -or $manifestLines[0] -notmatch '^# MASTER SHA256: ([0-9A-F]{64})$') {
+    Write-Host "Invalid SHA256 manifest."
+    exit 1
 }
 
-# Load the hash file, assuming it contains lines with the format: "<hash> <filename>"
+$expectedMasterHash = $Matches[1].ToUpper()
+
+# Remove header and blank lines
+$entries = $manifestLines |
+    Select-Object -Skip 2 |
+    Where-Object { $_.Trim() -ne "" }
+
+# Compute master hash from the entries
+$manifestText = $entries -join "`n"
+
+$memoryStream = [System.IO.MemoryStream]::new(
+    [System.Text.Encoding]::UTF8.GetBytes($manifestText)
+)
+
+$actualMasterHash = (
+    Get-FileHash -Algorithm SHA256 -InputStream $memoryStream
+).Hash.ToUpper()
+
+$memoryStream.Dispose()
+
+if ($actualMasterHash -ne $expectedMasterHash) {
+    Write-Host ""
+    Write-Host "MASTER HASH FAILED!"
+    Write-Host "Expected: $expectedMasterHash"
+    Write-Host "Actual:   $actualMasterHash"
+    Write-Host ""
+    Write-Host "The manifest has been modified or corrupted."
+    exit 1
+}
+
+Write-Host "Master hash verified."
+
+# Build lookup table
 $hashDictionary = @{}
-Get-Content $hashFilePath | ForEach-Object {
-    # Split each line into hash and filename
-    $lineParts = $_ -split ' ', 2
-    if ($lineParts.Length -eq 2) {
-        $hash = $lineParts[0].Trim()
-        $file = $lineParts[1].Trim()
-        $hashDictionary[$file] = $hash
+
+foreach ($entry in $entries) {
+    if ($entry -match '^([0-9A-Fa-f]{64})\s+(.+)$') {
+        $hashDictionary[$Matches[2]] = $Matches[1].ToUpper()
     }
 }
 
-# Recursively get all files in the current directory
-Get-ChildItem -Path $directoryPath -File -Recurse | ForEach-Object {
-    $filePath = $_.FullName
-    $relativeFilePath = $_.FullName.Substring($directoryPath.Length + 1) # Get file path relative to the current directory
+$allOK = $true
 
-    if ($hashDictionary.ContainsKey($relativeFilePath)) {
-        $expectedSHA256 = $hashDictionary[$relativeFilePath]
-        $sha256Hash = Get-SHA256Hash $filePath
+# Verify every file except the manifest itself
+Get-ChildItem -File -Recurse |
+    Where-Object { $_.Name -ne "SHA256" } |
+    Sort-Object FullName |
+    ForEach-Object {
 
-        if ($sha256Hash -eq $expectedSHA256) {
-            Write-Host "File '$relativeFilePath' is authentic."
-        } else {
-            Write-Host "File '$relativeFilePath' may have been tampered with!"
-            Write-Host "SHA256 Hash: $sha256Hash"
+        $relativePath = $_.FullName.Substring($directoryPath.Length + 1)
+
+        if (-not $hashDictionary.ContainsKey($relativePath)) {
+            Write-Host "Missing manifest entry: $relativePath"
+            $allOK = $false
+            return
         }
-    } else {
-        Write-Host "No hash entry found for file '$relativeFilePath' in the hash file."
+
+        $expectedHash = $hashDictionary[$relativePath]
+        $actualHash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToUpper()
+
+        if ($expectedHash -eq $actualHash) {
+            Write-Host "[OK] $relativePath"
+        }
+        else {
+            Write-Host "[FAIL] $relativePath"
+            Write-Host "  Expected: $expectedHash"
+            Write-Host "  Actual:   $actualHash"
+            $allOK = $false
+        }
+    }
+
+# Detect files that are listed in the manifest but don't exist
+foreach ($path in $hashDictionary.Keys) {
+    if (-not (Test-Path (Join-Path $directoryPath $path))) {
+        Write-Host "Missing file: $path"
+        $allOK = $false
     }
 }
 
-echo "All Ok" || echo "Something's fishy"
+if ($allOK) {
+    Write-Host ""
+    Write-Host "All OK"
+    exit 0
+}
+else {
+    Write-Host ""
+    Write-Host "Something's fishy"
+    exit 1
+}
