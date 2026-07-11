@@ -15,7 +15,7 @@ if ($manifestLines.Count -lt 3 -or $manifestLines[0] -notmatch '^# MASTER SHA256
     exit 1
 }
 
-$expectedMasterHash = $Matches[1].ToUpper()
+$expectedMasterHash = $Matches[1]
 
 # Remove header and blank lines
 $entries = $manifestLines |
@@ -51,8 +51,8 @@ Write-Host "Master hash verified."
 $hashDictionary = @{}
 
 foreach ($entry in $entries) {
-    if ($entry -match '^([0-9A-Fa-f]{64})\s+(.+)$') {
-        $hashDictionary[$Matches[2]] = $Matches[1].ToUpper()
+    if ($entry -match '^([0-9A-F]{64})\s+(.+)$') {
+        $hashDictionary[$Matches[2]] = $Matches[1]
     }
 }
 
